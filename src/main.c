@@ -12,7 +12,8 @@
 
 // Exercise 4. Include the libraries necessaries to use the usb-serial-debug, and tinyusb
 // Tehtävä 4 . Lisää usb-serial-debugin ja tinyusbin käyttämiseen tarvittavat kirjastot.
-
+#include <tusb.h>
+#include <usbSerialDebug/helper.h>
 
 
 #define DEFAULT_STACK_SIZE 2048
@@ -21,7 +22,7 @@
 
 // Tehtävä 3: Tilakoneen esittely Add missing states.
 // Exercise 3: Definition of the state machine. Add missing states.
-enum state { WAITING=1};
+enum state { WAITING=1, READY=2};
 enum state programState = WAITING;
 
 // Tehtävä 3: Valoisuuden globaali muuttuja
@@ -48,8 +49,12 @@ static void sensor_task(void *arg){
         // Exercise 2: Modify with application code here. Comment following line.
         //             Read sensor data and print it out as string; 
         //tight_loop_contents(); 
-    uint32_t raw = veml6030_read_light(); 
-    printf("raw %lu\n", (unsigned long)raw);
+    if (programState = WAITING) {
+        ambientLight = veml6030_read_light();
+        //printf("WAITING\n");
+        programState = READY;
+    }        
+    //printf("ambientLight %lu\n", ambientLight);
 
    
 
@@ -79,16 +84,29 @@ static void sensor_task(void *arg){
 
 static void print_task(void *arg){
     (void)arg;
-    
+    char buf[20];
+    char buf2[30];      
     while(1){
-        
+        if (programState = READY) {
+                if (tud_cdc_n_connected(CDC_ITF_TX)) {
+                    snprintf(buf2, 30, "%lu, %lu\n", xTaskGetTickCount(), ambientLight);
+                    tud_cdc_n_write(CDC_ITF_TX, buf2, strlen(buf2));
+                    tud_cdc_n_write_flush(CDC_ITF_TX);
+                }
+                if (usb_serial_connected()) {
+                    snprintf(buf, 20, "Lux: %lu\n", ambientLight);
+                    usb_serial_print(buf);
+                    usb_serial_flush();
+                    programState = WAITING;
+                }
+            }
         // Tehtävä 3: Kun tila on oikea, tulosta sensoridata merkkijonossa debug-ikkunaan
         //            Muista tilamuutos
         //            Älä unohda kommentoida seuraavaa koodiriviä.
         // Exercise 3: Print out sensor data as string to debug window if the state is correct
         //             Remember to modify state
         //             Do not forget to comment next line of code.
-        tight_loop_contents();
+      //tight_loop_contents();
         
 
 
@@ -125,14 +143,14 @@ static void print_task(void *arg){
 // Exercise 4: Uncomment the following line to activate the TinyUSB library.  
 // Tehtävä 4:  Poista seuraavan rivin kommentointi aktivoidaksesi TinyUSB-kirjaston. 
 
-/*
+
 static void usbTask(void *arg) {
     (void)arg;
     while (1) {
         tud_task();              // With FreeRTOS wait for events
                                  // Do not add vTaskDelay. 
     }
-}*/
+}
 
 int main() {
 
@@ -147,12 +165,12 @@ int main() {
     //             Lisää CMakeLists.txt-tiedostoon cfg-dual-usbcdc
     //             Poista CMakeLists.txt-tiedostosta käytöstä pico_enable_stdio_usb
 
-    stdio_init_all();
+    //stdio_init_all();
 
     // Uncomment this lines if you want to wait till the serial monitor is connected
     /*while (!stdio_usb_connected()){
         sleep_ms(10);
-    }*/ 
+    }*/
     
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
@@ -161,9 +179,9 @@ int main() {
     //             Interruption handler is defined up as btn_fxn
     // Tehtävä 1:  Alusta painike ja LEd ja rekisteröi vastaava keskeytys.
     //             Keskeytyskäsittelijä on määritelty yläpuolella nimellä btn_fxn
-  gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
-  init_red_led();
-  init_button1();
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
+    init_red_led();
+    init_button1();
 
 
     
@@ -174,14 +192,12 @@ int main() {
     // Tehtävä 4: Poista tämän xTaskCreate-rivin kommentointi luodaksesi tehtävän,
     // joka mahdollistaa kaksikanavaisen USB-viestinnän.
 
-    /*
+    
     xTaskCreate(usbTask, "usb", 2048, NULL, 3, &hUSB);
     #if (configNUMBER_OF_CORES > 1)
         vTaskCoreAffinitySet(hUSB, 1u << 0);
     #endif
-    */
-
-
+    
     // Create the tasks with xTaskCreate
     BaseType_t result = xTaskCreate(sensor_task, // (en) Task function
                 "sensor",                        // (en) Name of the task 
@@ -191,7 +207,7 @@ int main() {
                 &hSensorTask);                   // (en) A handle to control the execution of this task
 
     if(result != pdPASS) {
-        printf("Sensor task creation failed\n");
+        usb_serial_print("Sensor task creation failed\n");
         return 0;
     }
     result = xTaskCreate(print_task,  // (en) Task function
@@ -202,9 +218,12 @@ int main() {
                 &hPrintTask);         // (en) A handle to control the execution of this task
 
     if(result != pdPASS) {
-        printf("Print Task creation failed\n");
+        usb_serial_print("Print Task creation failed\n");
         return 0;
     }
+
+    usb_serial_init();
+    tusb_init();
 
     // Start the scheduler (never returns)
     vTaskStartScheduler();
